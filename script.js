@@ -12,12 +12,34 @@ let REGISTRY_ADDRESS = "";   // EmployeeRegistry
 const API_BASE = (location.protocol === 'file:') ? 'http://localhost:3000' : '';
 
 // Employee metrics keyed by UPPERCASE companyId — fetched from backend on load.
-// Used to supply work-metric context to the AI feedback prompt.
 let employeeMetrics = {};
 fetch(`${API_BASE}/employee-metrics.json`)
   .then(r => r.json())
-  .then(data => { employeeMetrics = data; })
+  .then(data => {
+    employeeMetrics = data;
+    populateQuickChips();
+    // Auto-fill if Company ID is already typed
+    tryAutoFillWalletFromCSV();
+  })
   .catch(() => {});
+
+function tryAutoFillWalletFromCSV() {
+  const cid = el('idInput') ? el('idInput').value.trim().toUpperCase() : '';
+  if (cid && employeeMetrics[cid] && employeeMetrics[cid].wallet) {
+    const csvWallet = employeeMetrics[cid].wallet;
+    if (ethers.isAddress(csvWallet)) {
+      const currentVal = el('walletInput').value.trim();
+      // Overwrite if empty or invalid/truncated
+      if (!currentVal || !ethers.isAddress(currentVal)) {
+        userAddress = csvWallet;
+        el('walletInput').value = csvWallet;
+        setWalletNote('Auto-filled registered wallet address from database.', 'ok');
+        el('topWalletBtn').textContent = csvWallet.slice(0, 6) + '…' + csvWallet.slice(-4);
+        checkLoginReady();
+      }
+    }
+  }
+}
 
 const REWARDS_ABI = [
   "function name() view returns (string)",
@@ -53,8 +75,6 @@ const el = id => document.getElementById(id);
 function showScreen(id) {
   document.querySelectorAll('.screen').forEach(s => s.classList.remove('active'));
   el(id).classList.add('active');
-  // Top wallet button only opens MetaMask for cross-checking once the user
-  // is past login, on the dashboard — not on the login page.
   el('topWalletBtn').disabled = (id !== 'dashboardScreen');
 }
 
@@ -93,8 +113,8 @@ function setWalletNote(text, kind) {
 async function requestMetaMaskAccount() {
   if (!window.ethereum) return null;
 
-  // 3-second timeout so it NEVER gets stuck on "Connecting..."
-  const timeout = new Promise(resolve => setTimeout(() => resolve(null), 3000));
+  // 1.5-second max wait so it NEVER hangs
+  const timeout = new Promise(resolve => setTimeout(() => resolve(null), 1500));
 
   const getAccount = async () => {
     try {
@@ -125,9 +145,9 @@ async function autoDetectWallet() {
     if (account && ethers.isAddress(account)) {
       userAddress = account;
       el('topWalletBtn').textContent = account.slice(0, 6) + '…' + account.slice(-4);
-      if (!el('walletInput').value.trim()) {
+      if (!el('walletInput').value.trim() || !ethers.isAddress(el('walletInput').value.trim())) {
         el('walletInput').value = account;
-        setWalletNote('MetaMask wallet auto-detected.', 'ok');
+        setWalletNote('MetaMask wallet connected.', 'ok');
       }
       checkLoginReady();
     }
@@ -137,12 +157,11 @@ window.addEventListener('DOMContentLoaded', autoDetectWallet);
 
 // Connect button handler
 el('connectBtn').addEventListener('click', async () => {
-  const typed = el('walletInput').value.trim();
+  setWalletNote('Connecting to MetaMask…', '');
 
-  // 1. Try MetaMask with 3s timeout
+  // 1. Try MetaMask with 1.5s timeout
   if (window.ethereum) {
     try {
-      setWalletNote('Connecting to MetaMask…', '');
       const account = await requestMetaMaskAccount();
 
       if (account && ethers.isAddress(account)) {
@@ -164,16 +183,7 @@ el('connectBtn').addEventListener('click', async () => {
     }
   }
 
-  // 2. Check if typed address in box is valid
-  if (typed && ethers.isAddress(typed)) {
-    userAddress = typed;
-    setWalletNote('Using typed wallet address.', 'ok');
-    el('topWalletBtn').textContent = typed.slice(0, 6) + '…' + typed.slice(-4);
-    checkLoginReady();
-    return;
-  }
-
-  // 3. Fallback: Auto-suggest address from CSV if Company ID is typed
+  // 2. Auto-suggest/auto-fill address from CSV if Company ID is typed
   const cid = el('idInput').value.trim().toUpperCase();
   if (cid && employeeMetrics[cid] && employeeMetrics[cid].wallet) {
     const csvWallet = employeeMetrics[cid].wallet;
@@ -187,7 +197,18 @@ el('connectBtn').addEventListener('click', async () => {
     }
   }
 
-  setWalletNote('Enter Name & Company ID above to sign in, or paste a valid 0x... address.', 'error');
+  // 3. Check if typed address in box is valid
+  const typed = el('walletInput').value.trim();
+  if (typed && ethers.isAddress(typed)) {
+    userAddress = typed;
+    setWalletNote('Using typed wallet address.', 'ok');
+    el('topWalletBtn').textContent = typed.slice(0, 6) + '…' + typed.slice(-4);
+    checkLoginReady();
+    return;
+  }
+
+  setWalletNote('Using registered employee wallet address from database.', 'ok');
+  tryAutoFillWalletFromCSV();
   checkLoginReady();
 });
 
@@ -200,7 +221,7 @@ el('walletInput').addEventListener('input', () => {
     el('topWalletBtn').textContent = typed.slice(0, 6) + '…' + typed.slice(-4);
   } else if (typed) {
     userAddress = null;
-    setWalletNote(`Invalid address (${typed.length}/42 chars).`, 'error');
+    setWalletNote(`Invalid address format (${typed.length}/42 chars).`, 'error');
     el('topWalletBtn').textContent = 'not connected';
   } else {
     userAddress = null;
@@ -210,21 +231,9 @@ el('walletInput').addEventListener('input', () => {
   checkLoginReady();
 });
 
-// When Company ID is entered, auto-suggest registered wallet address if box is empty or incomplete
+// When Company ID is entered, auto-suggest registered wallet address
 el('idInput').addEventListener('input', () => {
-  const cid = el('idInput').value.trim().toUpperCase();
-  if (cid && employeeMetrics[cid] && employeeMetrics[cid].wallet) {
-    const currentVal = el('walletInput').value.trim();
-    if (!currentVal || !ethers.isAddress(currentVal)) {
-      const w = employeeMetrics[cid].wallet;
-      if (ethers.isAddress(w)) {
-        userAddress = w;
-        el('walletInput').value = w;
-        setWalletNote('Auto-filled registered wallet address.', 'ok');
-        el('topWalletBtn').textContent = w.slice(0, 6) + '…' + w.slice(-4);
-      }
-    }
-  }
+  tryAutoFillWalletFromCSV();
   checkLoginReady();
 });
 
@@ -247,8 +256,7 @@ function checkLoginReady() {
   const nameOk = el('nameInput').value.trim().length > 0;
   const idOk   = el('idInput').value.trim().length > 0;
   
-  // Enable Sign In button as long as Name & ID are filled!
-  // Wallet address will be validated or auto-filled on submission if needed.
+  // Enable Sign In button whenever Name & Company ID are typed
   const isReady = nameOk && idOk;
   el('loginBtn').disabled = !isReady;
 }
