@@ -92,32 +92,62 @@ function setWalletNote(text, kind) {
 
 async function requestMetaMaskAccount() {
   if (!window.ethereum) return null;
-  // Request account connection from MetaMask
-  const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-  if (accounts && accounts.length > 0) {
-    return accounts[0];
+  // 1. Try currently connected accounts first (no popup needed)
+  try {
+    const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+    if (accounts && accounts.length > 0) return accounts[0];
+  } catch (e) {}
+  
+  // 2. Fall back to direct property if available
+  if (window.ethereum.selectedAddress) {
+    return window.ethereum.selectedAddress;
   }
+
+  // 3. Request account connection popup
+  try {
+    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+    if (accounts && accounts.length > 0) return accounts[0];
+  } catch (e) {}
+
   return null;
 }
+
+// Automatically check if MetaMask is already connected on load
+async function autoDetectWallet() {
+  if (!window.ethereum) return;
+  try {
+    const account = await requestMetaMaskAccount();
+    if (account && ethers.isAddress(account)) {
+      userAddress = account;
+      el('topWalletBtn').textContent = account.slice(0, 6) + '…' + account.slice(-4);
+      if (!el('walletInput').value.trim()) {
+        el('walletInput').value = account;
+        setWalletNote('MetaMask wallet auto-detected.', 'ok');
+      }
+      checkLoginReady();
+    }
+  } catch (e) {}
+}
+window.addEventListener('DOMContentLoaded', autoDetectWallet);
 
 // Connect button handler
 el('connectBtn').addEventListener('click', async () => {
   const typed = el('walletInput').value.trim();
 
-  // 1. If MetaMask is installed, trigger connection popup
+  // 1. If MetaMask is installed, try getting account
   if (window.ethereum) {
     try {
-      setWalletNote('Opening MetaMask — approve connection…', '');
+      setWalletNote('Connecting to MetaMask…', '');
       const account = await requestMetaMaskAccount();
 
-      if (account) {
+      if (account && ethers.isAddress(account)) {
         userAddress = account;
         el('walletInput').value = account;
         setWalletNote('Wallet connected via MetaMask.', 'ok');
         el('topWalletBtn').textContent = account.slice(0, 6) + '…' + account.slice(-4);
-        provider = new ethers.BrowserProvider(window.ethereum, 'any');
         try {
-          signer = await provider.getSigner(account);
+          provider = new ethers.BrowserProvider(window.ethereum, 'any');
+          signer   = await provider.getSigner(account);
         } catch (e) {
           signer = null;
         }
@@ -125,18 +155,37 @@ el('connectBtn').addEventListener('click', async () => {
         return;
       }
     } catch (e) {
-      setWalletNote('MetaMask connection rejected or failed.', 'error');
+      console.warn('MetaMask connect failed:', e);
     }
   }
 
-  // 2. If MetaMask is missing or connection didn't return an address, check typed address
+  // 2. Check if typed address in box is valid
   if (typed && ethers.isAddress(typed)) {
     userAddress = typed;
     setWalletNote('Using typed wallet address.', 'ok');
     el('topWalletBtn').textContent = typed.slice(0, 6) + '…' + typed.slice(-4);
     checkLoginReady();
+    return;
+  }
+
+  // 3. Auto-suggest address from CSV if Company ID is typed
+  const cid = el('idInput').value.trim().toUpperCase();
+  if (cid && employeeMetrics[cid] && employeeMetrics[cid].wallet) {
+    const csvWallet = employeeMetrics[cid].wallet;
+    if (ethers.isAddress(csvWallet)) {
+      userAddress = csvWallet;
+      el('walletInput').value = csvWallet;
+      setWalletNote('Filled wallet address registered for this Company ID.', 'ok');
+      el('topWalletBtn').textContent = csvWallet.slice(0, 6) + '…' + csvWallet.slice(-4);
+      checkLoginReady();
+      return;
+    }
+  }
+
+  if (!window.ethereum) {
+    setWalletNote('MetaMask not detected. Paste a valid 42-character wallet address (0x...).', 'error');
   } else {
-    setWalletNote('MetaMask extension not found in browser. Please paste a valid 0x... wallet address above.', 'error');
+    setWalletNote('Please approve connection in MetaMask or paste your 0x... wallet address.', 'error');
   }
 });
 
@@ -149,7 +198,7 @@ el('walletInput').addEventListener('input', () => {
     el('topWalletBtn').textContent = typed.slice(0, 6) + '…' + typed.slice(-4);
   } else if (typed) {
     userAddress = null;
-    setWalletNote('Invalid Ethereum wallet address.', 'error');
+    setWalletNote(`Invalid address (${typed.length}/42 chars). Must start with 0x...`, 'error');
     el('topWalletBtn').textContent = 'not connected';
   } else {
     userAddress = null;
@@ -159,16 +208,32 @@ el('walletInput').addEventListener('input', () => {
   checkLoginReady();
 });
 
+// When Company ID is entered, auto-suggest the registered wallet address if box is empty
+el('idInput').addEventListener('change', () => {
+  const cid = el('idInput').value.trim().toUpperCase();
+  if (cid && employeeMetrics[cid] && employeeMetrics[cid].wallet && !el('walletInput').value.trim()) {
+    const w = employeeMetrics[cid].wallet;
+    if (ethers.isAddress(w)) {
+      userAddress = w;
+      el('walletInput').value = w;
+      setWalletNote('Auto-filled registered wallet address from CSV.', 'ok');
+      el('topWalletBtn').textContent = w.slice(0, 6) + '…' + w.slice(-4);
+      checkLoginReady();
+    }
+  }
+});
+
 // Top navbar wallet button: re-connects MetaMask
 el('topWalletBtn').addEventListener('click', async () => {
   if (el('topWalletBtn').disabled) return;
   if (!window.ethereum) return;
   try {
     const account = await requestMetaMaskAccount();
-    if (account) {
+    if (account && ethers.isAddress(account)) {
       userAddress = account;
       el('walletInput').value = account;
       el('topWalletBtn').textContent = account.slice(0, 6) + '…' + account.slice(-4);
+      checkLoginReady();
     }
   } catch (e) { /* user cancelled */ }
 });
@@ -176,13 +241,15 @@ el('topWalletBtn').addEventListener('click', async () => {
 function checkLoginReady() {
   const nameOk   = el('nameInput').value.trim().length > 0;
   const idOk     = el('idInput').value.trim().length > 0;
-  const walletOk = !!userAddress || (el('walletInput').value.trim() && ethers.isAddress(el('walletInput').value.trim()));
+  const rawW     = el('walletInput').value.trim();
+  const walletOk = (userAddress && ethers.isAddress(userAddress)) || (rawW && ethers.isAddress(rawW));
   
   if (walletOk && !userAddress) {
-    userAddress = el('walletInput').value.trim();
+    userAddress = rawW;
   }
 
-  el('loginBtn').disabled = !(nameOk && idOk && walletOk);
+  const isReady = nameOk && idOk && walletOk;
+  el('loginBtn').disabled = !isReady;
 }
 
 el('nameInput').addEventListener('input', checkLoginReady);
