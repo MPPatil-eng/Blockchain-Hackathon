@@ -92,24 +92,29 @@ function setWalletNote(text, kind) {
 
 async function requestMetaMaskAccount() {
   if (!window.ethereum) return null;
-  // 1. Try currently connected accounts first (no popup needed)
-  try {
-    const accounts = await window.ethereum.request({ method: 'eth_accounts' });
-    if (accounts && accounts.length > 0) return accounts[0];
-  } catch (e) {}
-  
-  // 2. Fall back to direct property if available
-  if (window.ethereum.selectedAddress) {
-    return window.ethereum.selectedAddress;
-  }
 
-  // 3. Request account connection popup
-  try {
-    const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
-    if (accounts && accounts.length > 0) return accounts[0];
-  } catch (e) {}
+  // 3-second timeout so it NEVER gets stuck on "Connecting..."
+  const timeout = new Promise(resolve => setTimeout(() => resolve(null), 3000));
 
-  return null;
+  const getAccount = async () => {
+    try {
+      const accounts = await window.ethereum.request({ method: 'eth_accounts' });
+      if (accounts && accounts.length > 0) return accounts[0];
+    } catch (e) {}
+    
+    if (window.ethereum.selectedAddress) {
+      return window.ethereum.selectedAddress;
+    }
+
+    try {
+      const accounts = await window.ethereum.request({ method: 'eth_requestAccounts' });
+      if (accounts && accounts.length > 0) return accounts[0];
+    } catch (e) {}
+
+    return null;
+  };
+
+  return Promise.race([getAccount(), timeout]);
 }
 
 // Automatically check if MetaMask is already connected on load
@@ -134,7 +139,7 @@ window.addEventListener('DOMContentLoaded', autoDetectWallet);
 el('connectBtn').addEventListener('click', async () => {
   const typed = el('walletInput').value.trim();
 
-  // 1. If MetaMask is installed, try getting account
+  // 1. Try MetaMask with 3s timeout
   if (window.ethereum) {
     try {
       setWalletNote('Connecting to MetaMask…', '');
@@ -168,28 +173,25 @@ el('connectBtn').addEventListener('click', async () => {
     return;
   }
 
-  // 3. Auto-suggest address from CSV if Company ID is typed
+  // 3. Fallback: Auto-suggest address from CSV if Company ID is typed
   const cid = el('idInput').value.trim().toUpperCase();
   if (cid && employeeMetrics[cid] && employeeMetrics[cid].wallet) {
     const csvWallet = employeeMetrics[cid].wallet;
     if (ethers.isAddress(csvWallet)) {
       userAddress = csvWallet;
       el('walletInput').value = csvWallet;
-      setWalletNote('Filled wallet address registered for this Company ID.', 'ok');
+      setWalletNote('Auto-filled registered wallet address for this Company ID.', 'ok');
       el('topWalletBtn').textContent = csvWallet.slice(0, 6) + '…' + csvWallet.slice(-4);
       checkLoginReady();
       return;
     }
   }
 
-  if (!window.ethereum) {
-    setWalletNote('MetaMask not detected. Paste a valid 42-character wallet address (0x...).', 'error');
-  } else {
-    setWalletNote('Please approve connection in MetaMask or paste your 0x... wallet address.', 'error');
-  }
+  setWalletNote('Enter Name & Company ID above to sign in, or paste a valid 0x... address.', 'error');
+  checkLoginReady();
 });
 
-// Auto-detect when user types or pastes a valid wallet address
+// Auto-detect when user types or pastes a wallet address
 el('walletInput').addEventListener('input', () => {
   const typed = el('walletInput').value.trim();
   if (typed && ethers.isAddress(typed)) {
@@ -198,7 +200,7 @@ el('walletInput').addEventListener('input', () => {
     el('topWalletBtn').textContent = typed.slice(0, 6) + '…' + typed.slice(-4);
   } else if (typed) {
     userAddress = null;
-    setWalletNote(`Invalid address (${typed.length}/42 chars). Must start with 0x...`, 'error');
+    setWalletNote(`Invalid address (${typed.length}/42 chars).`, 'error');
     el('topWalletBtn').textContent = 'not connected';
   } else {
     userAddress = null;
@@ -208,19 +210,22 @@ el('walletInput').addEventListener('input', () => {
   checkLoginReady();
 });
 
-// When Company ID is entered, auto-suggest the registered wallet address if box is empty
-el('idInput').addEventListener('change', () => {
+// When Company ID is entered, auto-suggest registered wallet address if box is empty or incomplete
+el('idInput').addEventListener('input', () => {
   const cid = el('idInput').value.trim().toUpperCase();
-  if (cid && employeeMetrics[cid] && employeeMetrics[cid].wallet && !el('walletInput').value.trim()) {
-    const w = employeeMetrics[cid].wallet;
-    if (ethers.isAddress(w)) {
-      userAddress = w;
-      el('walletInput').value = w;
-      setWalletNote('Auto-filled registered wallet address from CSV.', 'ok');
-      el('topWalletBtn').textContent = w.slice(0, 6) + '…' + w.slice(-4);
-      checkLoginReady();
+  if (cid && employeeMetrics[cid] && employeeMetrics[cid].wallet) {
+    const currentVal = el('walletInput').value.trim();
+    if (!currentVal || !ethers.isAddress(currentVal)) {
+      const w = employeeMetrics[cid].wallet;
+      if (ethers.isAddress(w)) {
+        userAddress = w;
+        el('walletInput').value = w;
+        setWalletNote('Auto-filled registered wallet address.', 'ok');
+        el('topWalletBtn').textContent = w.slice(0, 6) + '…' + w.slice(-4);
+      }
     }
   }
+  checkLoginReady();
 });
 
 // Top navbar wallet button: re-connects MetaMask
@@ -239,16 +244,12 @@ el('topWalletBtn').addEventListener('click', async () => {
 });
 
 function checkLoginReady() {
-  const nameOk   = el('nameInput').value.trim().length > 0;
-  const idOk     = el('idInput').value.trim().length > 0;
-  const rawW     = el('walletInput').value.trim();
-  const walletOk = (userAddress && ethers.isAddress(userAddress)) || (rawW && ethers.isAddress(rawW));
+  const nameOk = el('nameInput').value.trim().length > 0;
+  const idOk   = el('idInput').value.trim().length > 0;
   
-  if (walletOk && !userAddress) {
-    userAddress = rawW;
-  }
-
-  const isReady = nameOk && idOk && walletOk;
+  // Enable Sign In button as long as Name & ID are filled!
+  // Wallet address will be validated or auto-filled on submission if needed.
+  const isReady = nameOk && idOk;
   el('loginBtn').disabled = !isReady;
 }
 
@@ -276,7 +277,6 @@ function setLoginMsg(text, kind) {
 }
 
 async function findEmployee(name, companyId, wallet) {
-  // status: 0 = not found, 1 = name mismatch, 2 = wallet mismatch, 3 = ok
   const status = await registryContract.checkLogin(companyId, name, wallet);
 
   if (status === 0 || status === 0n) {
@@ -297,10 +297,20 @@ el('loginForm').addEventListener('submit', async (e) => {
   e.preventDefault();
   const name      = el('nameInput').value.trim();
   const companyId = el('idInput').value.trim();
-  const wallet    = userAddress || el('walletInput').value.trim();
+  let wallet      = userAddress || el('walletInput').value.trim();
+
+  // If wallet is empty or invalid, auto-fill from CSV database if available
+  const cidUpper = companyId.toUpperCase();
+  if (!ethers.isAddress(wallet)) {
+    if (employeeMetrics[cidUpper] && employeeMetrics[cidUpper].wallet && ethers.isAddress(employeeMetrics[cidUpper].wallet)) {
+      wallet = employeeMetrics[cidUpper].wallet;
+      userAddress = wallet;
+      el('walletInput').value = wallet;
+    }
+  }
 
   if (!ethers.isAddress(wallet)) {
-    setLoginMsg('Please enter or connect a valid wallet address.', 'error');
+    setLoginMsg('Please connect MetaMask or paste a valid 42-character wallet address (0x...).', 'error');
     return;
   }
 
@@ -331,8 +341,7 @@ el('loginForm').addEventListener('submit', async (e) => {
     }
   }
 
-  // 2. Fallback verification against Backend CSV data (for testing/preview when contracts aren't deployed)
-  const cidUpper = companyId.toUpperCase();
+  // 2. Fallback verification against Backend CSV data
   const emp = employeeMetrics[cidUpper];
 
   if (!emp) {
