@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>ProofPay — Employee Portal</title>
+<meta name="description" content="ProofPay AI: Blockchain-powered employee performance evaluation and reward system. Employees earn PPAY tokens based on AI-generated performance scores." />
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@400;500;600;700&family=JetBrains+Mono:wght@400;500;700&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/ethers/5.7.2/ethers.umd.min.js"></script>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header class="topbar">
+  <div class="brand">Proof<span>Pay</span></div>
+  <div class="topbar-right">
+    <button id="demoToggleBtn" class="demo-pill">⚡ Try Demo</button>
+    <button id="topWalletBtn" class="netpill" disabled>not connected</button>
+  </div>
+</header>
+
+<!-- SETTINGS: contract address (edit once you've deployed) -->
+<details class="settings">
+  <summary>Contract settings</summary>
+  <div class="settings-body">
+    <label>Deployed ProofPayRewards contract address</label>
+    <input type="text" id="contractAddr" placeholder="ProofPayRewards address 0x..." />
+    <label>Deployed EmployeeRegistry contract address</label>
+    <input type="text" id="registryAddr" placeholder="EmployeeRegistry address 0x..." />
+    <button id="saveAddrBtn">Save</button>
+  </div>
+</details>
+
+<main class="stage">
+
+  <!-- ===================== LOGIN SCREEN ===================== -->
+  <section id="loginScreen" class="screen active">
+    <div class="badge-card">
+      <div class="badge-punch"></div>
+      <div class="badge-perf"></div>
+      <div class="badge-head">
+        <div class="badge-avatar" id="avatarInitials">--</div>
+        <div class="badge-title">
+          <div class="badge-org">PROOFPAY AI · EMPLOYEE ACCESS</div>
+          <div class="badge-sub">Enter your details to sign in</div>
+        </div>
+      </div>
+
+      <form id="loginForm" class="badge-form">
+        <label>Full name</label>
+        <input type="text" id="nameInput" placeholder="e.g. Aarav" autocomplete="off" required />
+
+        <label>Company ID</label>
+        <input type="text" id="idInput" placeholder="e.g. TCS20261001" autocomplete="off" required />
+
+        <label>MetaMask wallet</label>
+        <div class="wallet-row">
+          <input type="text" id="walletInput" placeholder="Paste or type your wallet address" autocomplete="off" />
+          <button type="button" id="connectBtn">Connect</button>
+        </div>
+        <div class="wallet-note" id="walletNote"></div>
+
+        <button type="submit" class="login-submit" id="loginBtn" disabled>Sign in</button>
+        <div class="form-msg" id="loginMsg"></div>
+      </form>
+    </div>
+  </section>
+
+  <!-- ===================== DEMO SCREEN ===================== -->
+  <section id="demoScreen" class="screen">
+    <div class="demo-wrap">
+      <div class="demo-header">
+        <div class="demo-badge">DEMO MODE</div>
+        <h1 class="demo-title">AI Performance Evaluation</h1>
+        <p class="demo-sub">Test the Groq LLM evaluation without MetaMask or deployed contracts.<br>Select any employee from the CSV to get a real AI score.</p>
+      </div>
+
+      <div class="demo-grid">
+        <!-- Input panel -->
+        <div class="panel">
+          <div class="panel-head">Evaluate Employee</div>
+          <div class="panel-body">
+            <form id="demoForm">
+              <label class="field-label">Full Name</label>
+              <input type="text" id="demoName" class="field-input" placeholder="e.g. Aarav" autocomplete="off" required />
+
+              <label class="field-label" style="margin-top:12px;">Company ID</label>
+              <input type="text" id="demoId" class="field-input" placeholder="e.g. TCS20261001" autocomplete="off" required />
+
+              <div class="quick-picks">
+                <div class="quick-label">Quick pick</div>
+                <div class="quick-chips" id="quickChips"></div>
+              </div>
+
+              <button type="submit" class="primary-btn full" id="demoEvalBtn" style="margin-top:16px;">
+                Run AI Evaluation
+              </button>
+              <div class="form-msg" id="demoMsg"></div>
+            </form>
+          </div>
+        </div>
+
+        <!-- Result panel -->
+        <div class="panel">
+          <div class="panel-head">Evaluation Result</div>
+          <div class="panel-body" id="demoResultBody">
+            <div class="demo-placeholder">
+              <div class="demo-placeholder-icon">🤖</div>
+              <div class="demo-placeholder-text">Results will appear here after evaluation</div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Full report panel -->
+        <div class="panel wide" id="demoReportPanel" style="display:none;">
+          <div class="panel-head">Full AI Report</div>
+          <div class="panel-body">
+            <div id="demoReportBody"></div>
+          </div>
+        </div>
+      </div>
+
+      <button id="demoBackBtn" class="ghost-btn" style="margin:24px auto;display:block;">← Back to Login</button>
+    </div>
+  </section>
+
+  <!-- ===================== DASHBOARD SCREEN ===================== -->
+  <section id="dashboardScreen" class="screen">
+    <div class="dash-grid">
+
+      <!-- Wallet / balance panel -->
+      <div class="panel">
+        <div class="panel-head">Account</div>
+        <div class="panel-body">
+          <div class="employee-line">
+            <div class="employee-avatar" id="dashInitials">--</div>
+            <div>
+              <div class="employee-name" id="dashName">—</div>
+              <div class="employee-id" id="dashId">—</div>
+            </div>
+          </div>
+          <div class="balance-block">
+            <div class="balance-label">Reward balance</div>
+            <div class="balance-amount" id="balanceOut">— PPAY</div>
+          </div>
+          <div class="kv"><span>Wallet</span><span id="walletOut">—</span></div>
+          <div class="kv"><span>Current score</span><span id="scoreOut">—</span></div>
+          <button id="logoutBtn" class="ghost-btn full">Sign out</button>
+        </div>
+      </div>
+
+      <!-- Claim panel -->
+      <div class="panel">
+        <div class="panel-head">Reward claim</div>
+        <div class="panel-body" id="claimPanelBody">
+          <div class="stamp-wrap">
+            <div class="stamp" id="claimStamp">CHECKING…</div>
+          </div>
+          <div class="claim-detail" id="claimDetail">Checking your on-chain eligibility…</div>
+          <button id="claimBtn" class="primary-btn full" disabled>Claim reward</button>
+        </div>
+      </div>
+
+      <!-- AI Feedback panel -->
+      <div class="panel wide">
+        <div class="panel-head">Performance feedback</div>
+        <div class="panel-body">
+          <div id="feedbackOut" class="feedback-text">Generating feedback…</div>
+        </div>
+      </div>
+
+      <!-- History panel -->
+      <div class="panel wide">
+        <div class="panel-head">Reward history</div>
+        <div class="panel-body">
+          <div id="historyList" class="history-list">
+            <div class="history-empty">Loading history from chain…</div>
+          </div>
+        </div>
+      </div>
+
+    </div>
+  </section>
+
+</main>
+
+<script src="script.js"></script>
+</body>
+</html>

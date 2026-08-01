@@ -1,0 +1,19 @@
+{
+  "name": "proofpay-backend",
+  "version": "1.0.0",
+  "description": "ProofPay AI — Full-stack employee performance reward system. Backend seeds the on-chain employee registry from CSV, generates performance scores via Groq LLM and writes them on-chain, and serves the frontend with an Express API.",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "seed": "node seedRegistry.js",
+    "score": "node generateScores.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "csv-parse": "^5.5.6",
+    "dotenv": "^16.4.5",
+    "ethers": "^6.17.0",
+    "express": "^5.2.1",
+    "openai": "^4.52.0"
+  }
+}
